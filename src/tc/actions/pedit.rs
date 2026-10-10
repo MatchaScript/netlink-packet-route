@@ -400,7 +400,7 @@ impl Emitable for TcPedit {
             .iter()
             .zip(keys.chunks_exact_mut(size_of::<TcPeditKeyBuffer>()))
         {
-            chunk.copy_from_slice(TcPeditKeyBuffer::from(k).as_bytes());
+            k.emit(chunk);
         }
     }
 }
@@ -469,5 +469,15 @@ impl From<&TcPeditKey> for TcPeditKeyBuffer {
             offmask: key.offmask,
             shift: key.shift,
         }
+    }
+}
+
+impl Emitable for TcPeditKey {
+    fn buffer_len(&self) -> usize {
+        size_of::<TcPeditKeyBuffer>()
+    }
+
+    fn emit(&self, buffer: &mut [u8]) {
+        buffer.copy_from_slice(TcPeditKeyBuffer::from(self).as_bytes());
     }
 }

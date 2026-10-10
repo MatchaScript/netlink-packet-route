@@ -184,3 +184,26 @@ fn test_tc_pedit_invalid_nkeys() {
     ];
     assert!(TcPedit::parse(&buffer).is_err());
 }
+
+// Verify that a [`TcPeditKey`] emits the kernel `tc_pedit_key` layout.
+#[test]
+fn test_emit_pedit_key() {
+    let key = TcPeditKey {
+        mask: 1,
+        val: 2,
+        off: 3,
+        at: 4,
+        offmask: 5,
+        shift: 6,
+    };
+
+    let mut buf = [0xffu8; 24];
+    assert_eq!(key.buffer_len(), buf.len());
+    key.emit(&mut buf);
+
+    let expected: Vec<u8> = [1u32, 2, 3, 4, 5, 6]
+        .iter()
+        .flat_map(|v| v.to_ne_bytes())
+        .collect();
+    assert_eq!(buf.as_slice(), expected.as_slice());
+}

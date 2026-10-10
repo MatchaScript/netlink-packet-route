@@ -10,3 +10,4 @@ Local Modifications:
 The snapshot equals Revision. Changes since then are the commits touching
 this directory in the monorepo history:
 - tc: Add support of `pedit` action
+- tc: Emit a pedit key on its own
