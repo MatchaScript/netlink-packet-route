@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: MIT
 
 use netlink_packet_core::{
-    emit_u32, emit_u32_be, emit_u64, parse_u16, parse_u16_be, parse_u32,
-    parse_u32_be, parse_u64, parse_u8, DecodeError, DefaultNla, Emitable,
-    ErrorContext, Nla, NlaBuffer, NlasIterator, Parseable,
-    ParseableParametrized,
+    emit_u32, emit_u64, parse_u16, parse_u16_be, parse_u32, parse_u64,
+    parse_u8, DecodeError, DefaultNla, Emitable, ErrorContext, Nla, NlaBuffer,
+    NlasIterator, Parseable, ParseableParametrized,
 };
 
 use super::{
     super::AddressFamily, lwtunnel::VecRouteLwTunnelEncap,
     metrics::VecRouteMetric, mpls::VecMplsLabel,
     next_hops::parse_multipath_next_hops, MplsLabel, RouteAddress,
-    RouteCacheInfo, RouteIp6Tunnel, RouteIpTunnel, RouteLwEnCapType,
-    RouteLwTunnelEncap, RouteMetric, RouteMfcStats, RouteMplsTtlPropagation,
-    RouteNextHop, RoutePreference, RouteRealm, RouteType, RouteVia,
+    RouteCacheInfo, RouteLwEnCapType, RouteLwTunnelEncap, RouteMetric,
+    RouteMfcStats, RouteMplsTtlPropagation, RouteNextHop, RoutePreference,
+    RouteRealm, RouteType, RouteVia,
 };
 
 const RTA_DST: u16 = 1;
@@ -63,9 +62,6 @@ pub enum RouteAttribute {
     Via(RouteVia),
     /// Only for MPLS for destination label(u32) to forward the packet with
     NewDestination(Vec<MplsLabel>),
-    /// The `as ADDRESS` address of `ip route get`, the address is packed as
-    /// a raw address instead of MPLS labels
-    NewDestinationAddress(RouteAddress),
     Preference(RoutePreference),
     EncapType(RouteLwEnCapType),
     Encap(Vec<RouteLwTunnelEncap>),
@@ -102,7 +98,6 @@ impl Nla for RouteAttribute {
             | Self::Source(addr) => addr.buffer_len(),
             Self::Via(v) => v.buffer_len(),
             Self::NewDestination(v) => VecMplsLabel(v.clone()).buffer_len(),
-            Self::NewDestinationAddress(v) => v.buffer_len(),
             Self::Encap(v) => v.as_slice().buffer_len(),
             Self::TtlPropagate(_) => 1,
             Self::CacheInfo(cache_info) => cache_info.buffer_len(),
@@ -137,7 +132,6 @@ impl Nla for RouteAttribute {
             | Self::Gateway(addr) => addr.emit(buffer),
             Self::Via(v) => v.emit(buffer),
             Self::NewDestination(v) => VecMplsLabel(v.to_vec()).emit(buffer),
-            Self::NewDestinationAddress(v) => v.emit(buffer),
 
             Self::Encap(nlas) => nlas.as_slice().emit(buffer),
             Self::TtlPropagate(v) => buffer[0] = u8::from(*v),
@@ -167,10 +161,9 @@ impl Nla for RouteAttribute {
             Self::Sport(value) | Self::Dport(value) => {
                 buffer[..2].copy_from_slice(&value.to_be_bytes())
             }
-            // RTA_FLOWLABEL is a NLA_BE32 attribute while RTA_NH_ID is a
-            // host endian one.
-            Self::Flowlabel(value) => emit_u32_be(buffer, *value).unwrap(),
-            Self::NhId(value) => emit_u32(buffer, *value).unwrap(),
+            Self::Flowlabel(value) | Self::NhId(value) => {
+                emit_u32(buffer, *value).unwrap()
+            }
             Self::Other(attr) => attr.emit_value(buffer),
         }
     }
@@ -193,7 +186,6 @@ impl Nla for RouteAttribute {
             Self::MfcStats(_) => RTA_MFC_STATS,
             Self::Via(_) => RTA_VIA,
             Self::NewDestination(_) => RTA_NEWDST,
-            Self::NewDestinationAddress(_) => RTA_NEWDST,
             Self::Preference(_) => RTA_PREF,
             Self::EncapType(_) => RTA_ENCAP_TYPE,
             Self::Encap(_) => RTA_ENCAP,
@@ -212,20 +204,9 @@ impl Nla for RouteAttribute {
 
     fn is_nested(&self) -> bool {
         if let Self::Encap(encap) = self {
-            // The kernel validates these encapsulation types with
-            // `nla_parse_nested()` which rejects a missing `NLA_F_NESTED`
-            // flag, `iproute2` always sets the flag on `RTA_ENCAP`.
-            encap.iter().any(|e| {
-                matches!(
-                    e,
-                    RouteLwTunnelEncap::Seg6(_)
-                        | RouteLwTunnelEncap::Xfrm(_)
-                        | RouteLwTunnelEncap::Rpl(_)
-                        | RouteLwTunnelEncap::Ioam6(_)
-                        | RouteLwTunnelEncap::Ip(RouteIpTunnel::Opts(_))
-                        | RouteLwTunnelEncap::Ip6(RouteIp6Tunnel::Opts(_))
-                )
-            })
+            encap
+                .iter()
+                .any(|e| matches!(e, RouteLwTunnelEncap::Seg6(_)))
         } else {
             false
         }
@@ -264,30 +245,11 @@ impl<'a, T: AsRef<[u8]> + ?Sized>
                 RouteVia::parse(payload)
                     .context(format!("Invalid RTA_VIA value {payload:?}"))?,
             ),
-            RTA_NEWDST => {
-                // `RTA_NEWDST` holds a MPLS label stack for MPLS routes and
-                // a plain address for `ip route get ADDR as ADDR`. The
-                // `Mpls` address family only exists on the Linux and Fuchsia
-                // targets.
-                #[cfg(any(target_os = "linux", target_os = "fuchsia"))]
-                let mpls = address_family == AddressFamily::Mpls;
-                #[cfg(not(any(target_os = "linux", target_os = "fuchsia")))]
-                let mpls = false;
-                if mpls {
-                    Self::NewDestination(
-                        VecMplsLabel::parse(payload)
-                            .context(format!(
-                                "Invalid RTA_NEWDST value {payload:?}"
-                            ))?
-                            .0,
-                    )
-                } else {
-                    Self::NewDestinationAddress(RouteAddress::parse(
-                        address_family,
-                        payload,
-                    )?)
-                }
-            }
+            RTA_NEWDST => Self::NewDestination(
+                VecMplsLabel::parse(payload)
+                    .context(format!("Invalid RTA_NEWDST value {payload:?}"))?
+                    .0,
+            ),
 
             RTA_PREF => Self::Preference(parse_u8(payload)?.into()),
             RTA_ENCAP => Self::Encap(
@@ -367,7 +329,7 @@ impl<'a, T: AsRef<[u8]> + ?Sized>
                 parse_u16_be(payload).context("invalid RTA_DPORT value")?,
             ),
             RTA_FLOWLABEL => Self::Flowlabel(
-                parse_u32_be(payload).context("invalid RTA_FLOWLABEL value")?,
+                parse_u32(payload).context("invalid RTA_FLOWLABEL value")?,
             ),
             RTA_NH_ID => Self::NhId(
                 parse_u32(payload).context("invalid RTA_NH_ID value")?,

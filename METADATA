@@ -1,0 +1,12 @@
+Name: netlink-packet-route
+URL: https://github.com/rust-netlink/netlink-packet-route
+Version: 0.33.0
+Revision: 6d158e83376703f2125af5ad832b355aaec79eba
+Update Mechanism: Manual
+License: MIT
+License File: LICENSE-MIT
+
+Local Modifications:
+The snapshot equals Revision. Changes since then are the commits touching
+this directory in the monorepo history:
+- tc: Add support of `pedit` action

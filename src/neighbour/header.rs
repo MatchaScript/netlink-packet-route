@@ -50,9 +50,11 @@ pub struct NeighbourHeader {
     pub ifindex: u32,
     /// Neighbour cache entry state.
     pub state: NeighbourState,
-    /// Neighbour cache entry flags.
+    /// Neighbour cache entry flags. It should be set to a combination
+    /// of the `NTF_*` constants
     pub flags: NeighbourFlags,
-    /// Neighbour cache entry type.
+    /// Neighbour cache entry type. It should be set to one of the
+    /// `NDA_*` constants.
     pub kind: RouteType,
 }
 

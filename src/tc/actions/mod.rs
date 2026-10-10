@@ -17,6 +17,11 @@ pub use self::{
         TcMirrorBuffer,
     },
     nat::{TcActionNat, TcActionNatOption, TcNat, TcNatBuffer},
+    pedit::{
+        TcActionPedit, TcActionPeditOption, TcPedit, TcPeditBuffer, TcPeditCmd,
+        TcPeditHeaderType, TcPeditKey, TcPeditKeyBuffer, TcPeditKeyEx,
+        TcPeditKeyExOption,
+    },
     tunnel_key::{TcActionTunnelKey, TcActionTunnelKeyOption, TcTunnelKey},
 };
 
@@ -26,6 +31,7 @@ mod message;
 mod mirror;
 mod nat;
 mod nat_flag;
+mod pedit;
 mod tunnel_key;
 
 #[cfg(test)]

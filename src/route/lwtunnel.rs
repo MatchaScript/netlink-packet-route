@@ -1,23 +1,15 @@
 // SPDX-License-Identifier: MIT
 
-use std::{
-    fmt::Debug,
-    mem::size_of,
-    net::{Ipv4Addr, Ipv6Addr},
-};
+use std::{fmt::Debug, mem::size_of, net::Ipv6Addr};
 
 use netlink_packet_core::{
-    emit_u16_be, emit_u32, emit_u64_be, parse_u16_be, parse_u32, parse_u64_be,
-    parse_u8, DecodeError, DefaultNla, Emitable, ErrorContext, Nla, NlaBuffer,
-    NlasIterator, Parseable, ParseableParametrized, NLA_F_NESTED,
+    emit_u16_be, emit_u64_be, parse_u16_be, parse_u64_be, parse_u8,
+    DecodeError, DefaultNla, Emitable, ErrorContext, Nla, NlaBuffer,
+    NlasIterator, Parseable, ParseableParametrized,
 };
 
-use super::{
-    tunnel_opts::LWTUNNEL_IP_OPTS, RouteIoam6Tunnel, RouteLwTunnelOpt,
-    RouteMplsIpTunnel, RouteRplIpTunnel, RouteSeg6IpTunnel,
-    RouteSeg6LocalTunnel,
-};
-use crate::ip::{parse_ipv4_addr, parse_ipv6_addr};
+use super::{RouteMplsIpTunnel, RouteSeg6IpTunnel};
+use crate::ip::parse_ipv6_addr;
 
 const LWTUNNEL_ENCAP_NONE: u16 = 0;
 const LWTUNNEL_ENCAP_MPLS: u16 = 1;
@@ -30,14 +22,6 @@ const LWTUNNEL_ENCAP_SEG6_LOCAL: u16 = 7;
 const LWTUNNEL_ENCAP_RPL: u16 = 8;
 const LWTUNNEL_ENCAP_IOAM6: u16 = 9;
 const LWTUNNEL_ENCAP_XFRM: u16 = 10;
-
-const LWTUNNEL_IP_UNSPEC: u16 = 0;
-const LWTUNNEL_IP_ID: u16 = 1;
-const LWTUNNEL_IP_DST: u16 = 2;
-const LWTUNNEL_IP_SRC: u16 = 3;
-const LWTUNNEL_IP_TTL: u16 = 4;
-const LWTUNNEL_IP_TOS: u16 = 5;
-const LWTUNNEL_IP_FLAGS: u16 = 6;
 
 const LWTUNNEL_IP6_UNSPEC: u16 = 0;
 const LWTUNNEL_IP6_ID: u16 = 1;
@@ -52,10 +36,6 @@ const LWTUNNEL_IP6_FLAGS: u16 = 6;
 const IP_TUNNEL_CSUM_BIT: u16 = 1;
 const IP_TUNNEL_KEY_BIT: u16 = 4;
 const IP_TUNNEL_SEQ_BIT: u16 = 8;
-
-const LWT_XFRM_UNSPEC: u16 = 0;
-const LWT_XFRM_IF_ID: u16 = 1;
-const LWT_XFRM_LINK: u16 = 2;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 #[non_exhaustive]
@@ -133,159 +113,12 @@ impl std::fmt::Display for RouteLwEnCapType {
             Self::Ip6 => write!(f, "ip6"),
             Self::Seg6 => write!(f, "seg6"),
             Self::Bpf => write!(f, "bpf"),
-            Self::Seg6Local => write!(f, "seg6local"),
+            Self::Seg6Local => write!(f, "seg6_local"),
             Self::Rpl => write!(f, "rpl"),
             Self::Ioam6 => write!(f, "ioam6"),
             Self::Xfrm => write!(f, "xfrm"),
             Self::Other(d) => write!(f, "other({d})"),
         }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Default)]
-#[non_exhaustive]
-pub enum RouteIpTunnel {
-    #[default]
-    Unspecified,
-    Id(u64),
-    Destination(Ipv4Addr),
-    Source(Ipv4Addr),
-    Ttl(u8),
-    Tos(u8),
-    Flags(RouteIpTunnelFlags),
-    /// The `LWTUNNEL_IP_OPTS` attributes of the `geneve_opts`, `vxlan_opts`
-    /// and `erspan_opts` options.
-    Opts(Vec<RouteLwTunnelOpt>),
-    Other(DefaultNla),
-}
-
-bitflags! {
-    #[non_exhaustive]
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    pub struct RouteIpTunnelFlags : u16 {
-        const Key = IP_TUNNEL_KEY_BIT;
-        const Checksum = IP_TUNNEL_CSUM_BIT;
-        const Sequence = IP_TUNNEL_SEQ_BIT;
-        const _ = !0;
-    }
-}
-
-impl std::fmt::Display for RouteIpTunnel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unspecified => write!(f, "unspecified"),
-            Self::Id(id) => write!(f, "id {id}"),
-            Self::Destination(dst) => write!(f, "dst {dst}"),
-            Self::Source(src) => write!(f, "src {src}"),
-            Self::Ttl(ttl) => write!(f, "ttl {ttl}"),
-            Self::Tos(tos) => write!(f, "tos {tos}"),
-            Self::Flags(flags) => {
-                if flags.contains(RouteIpTunnelFlags::Key) {
-                    write!(f, "key ")?;
-                }
-                if flags.contains(RouteIpTunnelFlags::Checksum) {
-                    write!(f, "csum ")?;
-                }
-
-                if flags.contains(RouteIpTunnelFlags::Sequence) {
-                    write!(f, "seq ")?;
-                }
-
-                Ok(())
-            }
-            Self::Opts(opts) => {
-                for (index, opt) in opts.iter().enumerate() {
-                    if index > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{opt}")?;
-                }
-                Ok(())
-            }
-            Self::Other(other) => other.fmt(f),
-        }
-    }
-}
-
-impl Nla for RouteIpTunnel {
-    fn value_len(&self) -> usize {
-        match self {
-            Self::Unspecified => 0,
-            Self::Id(_) => size_of::<u64>(),
-            Self::Destination(_) => size_of::<Ipv4Addr>(),
-            Self::Source(_) => size_of::<Ipv4Addr>(),
-            Self::Ttl(_) => size_of::<u8>(),
-            Self::Tos(_) => size_of::<u8>(),
-            Self::Flags(_) => size_of::<u16>(),
-            Self::Opts(opts) => opts.as_slice().buffer_len(),
-            Self::Other(_) => size_of::<DefaultNla>(),
-        }
-    }
-
-    fn kind(&self) -> u16 {
-        match self {
-            Self::Unspecified => LWTUNNEL_IP_UNSPEC,
-            Self::Id(_) => LWTUNNEL_IP_ID,
-            Self::Destination(_) => LWTUNNEL_IP_DST,
-            Self::Source(_) => LWTUNNEL_IP_SRC,
-            Self::Ttl(_) => LWTUNNEL_IP_TTL,
-            Self::Tos(_) => LWTUNNEL_IP_TOS,
-            Self::Flags(_) => LWTUNNEL_IP_FLAGS,
-            Self::Opts(_) => LWTUNNEL_IP_OPTS | NLA_F_NESTED,
-            Self::Other(other) => other.kind(),
-        }
-    }
-
-    fn emit_value(&self, buffer: &mut [u8]) {
-        match self {
-            Self::Unspecified => {}
-            Self::Id(id) => emit_u64_be(buffer, *id).unwrap(),
-            Self::Destination(ip) | Self::Source(ip) => {
-                buffer.copy_from_slice(&ip.octets());
-            }
-            Self::Ttl(value) | Self::Tos(value) => buffer[0] = *value,
-            Self::Flags(flags) => emit_u16_be(buffer, flags.bits()).unwrap(),
-            Self::Opts(opts) => opts.as_slice().emit(buffer),
-            Self::Other(other) => other.emit_value(buffer),
-        }
-    }
-}
-
-impl<'a, T> Parseable<NlaBuffer<&'a T>> for RouteIpTunnel
-where
-    T: AsRef<[u8]> + ?Sized,
-{
-    fn parse(buf: &NlaBuffer<&'a T>) -> Result<Self, DecodeError> {
-        let payload = buf.value();
-        Ok(match buf.kind() {
-            LWTUNNEL_IP_UNSPEC => Self::Unspecified,
-            LWTUNNEL_IP_ID => Self::Id(
-                parse_u64_be(payload)
-                    .context("invalid LWTUNNEL_IP_ID value")?,
-            ),
-            LWTUNNEL_IP_DST => Self::Destination(
-                parse_ipv4_addr(payload)
-                    .context("invalid LWTUNNEL_IP_DST value")?,
-            ),
-            LWTUNNEL_IP_SRC => Self::Source(
-                parse_ipv4_addr(payload)
-                    .context("invalid LWTUNNEL_IP_SRC value")?,
-            ),
-            LWTUNNEL_IP_TTL => Self::Ttl(
-                parse_u8(payload).context("invalid LWTUNNEL_IP_TTL value")?,
-            ),
-            LWTUNNEL_IP_TOS => Self::Tos(
-                parse_u8(payload).context("invalid LWTUNNEL_IP_TOS value")?,
-            ),
-            LWTUNNEL_IP_FLAGS => {
-                Self::Flags(RouteIpTunnelFlags::from_bits_retain(
-                    parse_u16_be(payload)
-                        .context("invalid LWTUNNEL_IP_FLAGS value")?,
-                ))
-            }
-            LWTUNNEL_IP_OPTS => Self::Opts(parse_tunnel_opts(payload)?),
-            _ => Self::Other(DefaultNla::parse(buf)?),
-        })
     }
 }
 
@@ -300,9 +133,6 @@ pub enum RouteIp6Tunnel {
     Hoplimit(u8),
     Tc(u8),
     Flags(RouteIp6TunnelFlags),
-    /// The `LWTUNNEL_IP6_OPTS` attributes of the `geneve_opts`, `vxlan_opts`
-    /// and `erspan_opts` options.
-    Opts(Vec<RouteLwTunnelOpt>),
     Other(DefaultNla),
 }
 
@@ -340,15 +170,6 @@ impl std::fmt::Display for RouteIp6Tunnel {
 
                 Ok(())
             }
-            Self::Opts(opts) => {
-                for (index, opt) in opts.iter().enumerate() {
-                    if index > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{opt}")?;
-                }
-                Ok(())
-            }
             Self::Other(other) => other.fmt(f),
         }
     }
@@ -364,7 +185,6 @@ impl Nla for RouteIp6Tunnel {
             Self::Hoplimit(_) => size_of::<u8>(),
             Self::Tc(_) => size_of::<u8>(),
             Self::Flags(_) => size_of::<u16>(),
-            Self::Opts(opts) => opts.as_slice().buffer_len(),
             Self::Other(_) => size_of::<DefaultNla>(),
         }
     }
@@ -378,7 +198,6 @@ impl Nla for RouteIp6Tunnel {
             Self::Hoplimit(_) => LWTUNNEL_IP6_HOPLIMIT,
             Self::Tc(_) => LWTUNNEL_IP6_TC,
             Self::Flags(_) => LWTUNNEL_IP6_FLAGS,
-            Self::Opts(_) => LWTUNNEL_IP_OPTS | NLA_F_NESTED,
             Self::Other(other) => other.kind(),
         }
     }
@@ -392,7 +211,6 @@ impl Nla for RouteIp6Tunnel {
             }
             Self::Hoplimit(value) | Self::Tc(value) => buffer[0] = *value,
             Self::Flags(flags) => emit_u16_be(buffer, flags.bits()).unwrap(),
-            Self::Opts(opts) => opts.as_slice().emit(buffer),
             Self::Other(other) => other.emit_value(buffer),
         }
     }
@@ -431,7 +249,6 @@ where
                         .context("invalid LWTUNNEL_IP6_FLAGS value")?,
                 ))
             }
-            LWTUNNEL_IP_OPTS => Self::Opts(parse_tunnel_opts(payload)?),
             _ => Self::Other(DefaultNla::parse(buf)?),
         })
     }
@@ -442,82 +259,8 @@ where
 pub enum RouteLwTunnelEncap {
     Mpls(RouteMplsIpTunnel),
     Seg6(RouteSeg6IpTunnel),
-    Ip(RouteIpTunnel),
     Ip6(RouteIp6Tunnel),
-    Ioam6(RouteIoam6Tunnel),
-    Rpl(RouteRplIpTunnel),
-    Seg6Local(RouteSeg6LocalTunnel),
-    Xfrm(RouteXfrmTunnel),
     Other(DefaultNla),
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Default)]
-#[non_exhaustive]
-pub enum RouteXfrmTunnel {
-    #[default]
-    Unspecified,
-    IfId(u32),
-    Link(u32),
-    Other(DefaultNla),
-}
-
-impl std::fmt::Display for RouteXfrmTunnel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unspecified => write!(f, "unspecified"),
-            Self::IfId(if_id) => write!(f, "if_id {if_id}"),
-            Self::Link(link) => write!(f, "link_dev {link}"),
-            Self::Other(other) => other.fmt(f),
-        }
-    }
-}
-
-impl Nla for RouteXfrmTunnel {
-    fn value_len(&self) -> usize {
-        match self {
-            Self::Unspecified => 0,
-            Self::IfId(_) | Self::Link(_) => size_of::<u32>(),
-            Self::Other(_) => size_of::<DefaultNla>(),
-        }
-    }
-
-    fn kind(&self) -> u16 {
-        match self {
-            Self::Unspecified => LWT_XFRM_UNSPEC,
-            Self::IfId(_) => LWT_XFRM_IF_ID,
-            Self::Link(_) => LWT_XFRM_LINK,
-            Self::Other(other) => other.kind(),
-        }
-    }
-
-    fn emit_value(&self, buffer: &mut [u8]) {
-        match self {
-            Self::Unspecified => {}
-            Self::IfId(value) | Self::Link(value) => {
-                emit_u32(buffer, *value).unwrap()
-            }
-            Self::Other(other) => other.emit_value(buffer),
-        }
-    }
-}
-
-impl<'a, T> Parseable<NlaBuffer<&'a T>> for RouteXfrmTunnel
-where
-    T: AsRef<[u8]> + ?Sized,
-{
-    fn parse(buf: &NlaBuffer<&'a T>) -> Result<Self, DecodeError> {
-        let payload = buf.value();
-        Ok(match buf.kind() {
-            LWT_XFRM_UNSPEC => Self::Unspecified,
-            LWT_XFRM_IF_ID => Self::IfId(
-                parse_u32(payload).context("invalid LWT_XFRM_IF_ID value")?,
-            ),
-            LWT_XFRM_LINK => Self::Link(
-                parse_u32(payload).context("invalid LWT_XFRM_LINK value")?,
-            ),
-            _ => Self::Other(DefaultNla::parse(buf)?),
-        })
-    }
 }
 
 impl Nla for RouteLwTunnelEncap {
@@ -525,12 +268,7 @@ impl Nla for RouteLwTunnelEncap {
         match self {
             Self::Mpls(v) => v.value_len(),
             Self::Seg6(v) => v.value_len(),
-            Self::Ip(v) => v.value_len(),
             Self::Ip6(v) => v.value_len(),
-            Self::Ioam6(v) => v.value_len(),
-            Self::Rpl(v) => v.value_len(),
-            Self::Seg6Local(v) => v.value_len(),
-            Self::Xfrm(v) => v.value_len(),
             Self::Other(v) => v.value_len(),
         }
     }
@@ -539,12 +277,7 @@ impl Nla for RouteLwTunnelEncap {
         match self {
             Self::Mpls(v) => v.emit_value(buffer),
             Self::Seg6(v) => v.emit_value(buffer),
-            Self::Ip(v) => v.emit_value(buffer),
             Self::Ip6(v) => v.emit_value(buffer),
-            Self::Ioam6(v) => v.emit_value(buffer),
-            Self::Rpl(v) => v.emit_value(buffer),
-            Self::Seg6Local(v) => v.emit_value(buffer),
-            Self::Xfrm(v) => v.emit_value(buffer),
             Self::Other(v) => v.emit_value(buffer),
         }
     }
@@ -553,12 +286,7 @@ impl Nla for RouteLwTunnelEncap {
         match self {
             Self::Mpls(v) => v.kind(),
             Self::Seg6(v) => v.kind(),
-            Self::Ip(v) => v.kind(),
             Self::Ip6(v) => v.kind(),
-            Self::Ioam6(v) => v.kind(),
-            Self::Rpl(v) => v.kind(),
-            Self::Seg6Local(v) => v.kind(),
-            Self::Xfrm(v) => v.kind(),
             Self::Other(v) => v.kind(),
         }
     }
@@ -580,16 +308,7 @@ where
             RouteLwEnCapType::Seg6 => {
                 Self::Seg6(RouteSeg6IpTunnel::parse(buf)?)
             }
-            RouteLwEnCapType::Ip => Self::Ip(RouteIpTunnel::parse(buf)?),
             RouteLwEnCapType::Ip6 => Self::Ip6(RouteIp6Tunnel::parse(buf)?),
-            RouteLwEnCapType::Ioam6 => {
-                Self::Ioam6(RouteIoam6Tunnel::parse(buf)?)
-            }
-            RouteLwEnCapType::Rpl => Self::Rpl(RouteRplIpTunnel::parse(buf)?),
-            RouteLwEnCapType::Seg6Local => {
-                Self::Seg6Local(RouteSeg6LocalTunnel::parse(buf)?)
-            }
-            RouteLwEnCapType::Xfrm => Self::Xfrm(RouteXfrmTunnel::parse(buf)?),
             _ => Self::Other(DefaultNla::parse(buf)?),
         })
     }
@@ -618,18 +337,4 @@ where
         }
         Ok(Self(ret))
     }
-}
-
-fn parse_tunnel_opts(
-    payload: &[u8],
-) -> Result<Vec<RouteLwTunnelOpt>, DecodeError> {
-    let mut opts = Vec::new();
-    for nla in NlasIterator::new(payload) {
-        let nla = nla.context("Invalid LWTUNNEL_IP_OPTS value")?;
-        opts.push(
-            RouteLwTunnelOpt::parse(&nla)
-                .context("Invalid LWTUNNEL_IP_OPTS value")?,
-        );
-    }
-    Ok(opts)
 }

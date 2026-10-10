@@ -11,7 +11,8 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 
 use super::{
     TcActionMirror, TcActionMirrorOption, TcActionNat, TcActionNatOption,
-    TcActionTunnelKey, TcActionTunnelKeyOption,
+    TcActionPedit, TcActionPeditOption, TcActionTunnelKey,
+    TcActionTunnelKeyOption,
 };
 use crate::tc::TcStats2;
 
@@ -285,6 +286,10 @@ pub enum TcActionOption {
     ///
     /// These options type can be used to perform network address translation.
     Nat(TcActionNatOption),
+    /// Pedit options.
+    ///
+    /// These options type can be used to rewrite packet header fields.
+    Pedit(TcActionPeditOption),
     /// Tunnel key options.
     ///
     /// These options type can be used to assign encapsulation properties to
@@ -299,6 +304,7 @@ impl Nla for TcActionOption {
         match self {
             Self::Mirror(nla) => nla.value_len(),
             Self::Nat(nla) => nla.value_len(),
+            Self::Pedit(nla) => nla.value_len(),
             Self::TunnelKey(nla) => nla.value_len(),
             Self::Other(nla) => nla.value_len(),
         }
@@ -308,6 +314,7 @@ impl Nla for TcActionOption {
         match self {
             Self::Mirror(nla) => nla.emit_value(buffer),
             Self::Nat(nla) => nla.emit_value(buffer),
+            Self::Pedit(nla) => nla.emit_value(buffer),
             Self::TunnelKey(nla) => nla.emit_value(buffer),
             Self::Other(nla) => nla.emit_value(buffer),
         }
@@ -317,6 +324,7 @@ impl Nla for TcActionOption {
         match self {
             Self::Mirror(nla) => nla.kind(),
             Self::Nat(nla) => nla.kind(),
+            Self::Pedit(nla) => nla.kind(),
             Self::TunnelKey(nla) => nla.kind(),
             Self::Other(nla) => nla.kind(),
         }
@@ -340,6 +348,10 @@ where
             TcActionNat::KIND => Self::Nat(
                 TcActionNatOption::parse(buf)
                     .context("failed to parse nat action")?,
+            ),
+            TcActionPedit::KIND => Self::Pedit(
+                TcActionPeditOption::parse(buf)
+                    .context("failed to parse pedit action")?,
             ),
             TcActionTunnelKey::KIND => Self::TunnelKey(
                 TcActionTunnelKeyOption::parse(buf)
